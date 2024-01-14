@@ -1,2 +1,6 @@
 .ipynb_checkpoints*
-/models/
+./models/
+*/models/*
+*models*
+*ipynb_checkpoints*
+.ipynb_checkpoints/*
