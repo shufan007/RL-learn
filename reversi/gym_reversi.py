@@ -20,8 +20,6 @@ def make_random_policy(np_random):
             board_size = state.shape[1]
             # pass, 当没有合法落子位置时 pass
             return board_size**2
-            # # resign
-            # return board_size**2 + 1
         a = np_random.integers(len(possible_places))
         return possible_places[a]
 
@@ -37,29 +35,32 @@ class ReversiEnv(gym.Env):
     WHITE = 1
     metadata = {"render.modes": ["ansi", "human"]}
 
-    def __init__(
-        self, player_color, opponent, observation_type, illegal_place_mode, board_size
-    ):
+    def __init__(self, player_color, opponent, observation_type, board_size,
+                 replace_invalid_action=True, only_game_finished_reward=False,
+                 valid_place_reward=1, illegal_place_reward=-2, winner_reward=10
+                 ):
         """
         Args:
             player_color: Stone color for the agent. Either 'black' or 'white'
             opponent: An opponent policy
             observation_type: State encoding
-            illegal_place_mode:
-                What to do when the agent makes an illegal place.
-                Choices: 'raise' or 'lose'
             board_size: size of the Reversi board
+            replace_invalid_action: 是否将非法行动作替换为随机合法动作
+            only_game_finished_reward: 是否只有游戏结束才能获得奖励
         """
         assert (
             isinstance(board_size, int) and board_size >= 1
         ), "Invalid board size: {}".format(board_size)
         self.board_size = board_size
+
+        self.only_game_finished_reward=only_game_finished_reward
+        self.replace_invalid_action=replace_invalid_action
         # 合法落子奖励
-        self.valid_place_reward = 1
+        self.valid_place_reward = valid_place_reward
         # 非法落子惩罚
-        self.illegal_place_reward = -2
+        self.illegal_place_reward = illegal_place_reward
         # 最终游戏输赢的额外回报
-        self.winner_reward = 10
+        self.winner_reward = winner_reward
 
         colormap = {
             "black": ReversiEnv.BLACK,
@@ -76,9 +77,6 @@ class ReversiEnv(gym.Env):
 
         assert observation_type in ["numpy3c"]
         self.observation_type = observation_type
-
-        assert illegal_place_mode in ["lose", "raise"]
-        self.illegal_place_mode = illegal_place_mode
 
         if self.observation_type != "numpy3c":
             raise error.Error(
@@ -111,7 +109,6 @@ class ReversiEnv(gym.Env):
         return [seed]
 
     def reset(self, seed=None, options=None):
-        # super().reset(seed=seed)
         # init board setting
         self.state = np.zeros((3, self.board_size, self.board_size), dtype=int)
         centerL = int(self.board_size / 2 - 1)
@@ -143,36 +140,28 @@ class ReversiEnv(gym.Env):
         if self.done:
             return self.state, 0.0, True, truncated, {"state": self.state}
         score_diff_before = ReversiEnv.get_score_diff(self.state)
-
         place_reward = 0
-        if ReversiEnv.pass_place(self.board_size, action):
-            # 没有合法落子点时，action 为‘pass’ 正确，否则惩罚
-            if len(self.possible_actions) == 0:
-                # return self.state, 1.0, False, truncated, {"state": self.state}
+
+        # 有合法落子点时
+        if len(self.possible_actions) > 0:
+            # action 为非法落子
+            if not ReversiEnv.valid_place(self.state, action, self.player_color):
+                place_reward = self.illegal_place_reward
+                if self.replace_invalid_action:
+                    if len(self.possible_actions) > 0:
+                        a_index = self.np_random.integers(len(self.possible_actions))
+                        _action = self.possible_actions[a_index]
+                        ReversiEnv.make_place(self.state, _action, self.player_color)
+            # action 为合法落子
+            else:
                 place_reward = self.valid_place_reward
-                pass
-            else:
-                place_reward = self.illegal_place_reward
-        # elif ReversiEnv.resign_place(self.board_size, action):
-        #     return self.state, -1, True, truncated, {"state": self.state}
-        elif not ReversiEnv.valid_place(self.state, action, self.player_color):
-            if self.illegal_place_mode == "raise":
-                raise
-            elif self.illegal_place_mode == "lose":
-                # Automatic loss on illegal place
-                # self.done = True
-                # self.done = False
-                # return self.state, -2.0, self.done, truncated, {"state": self.state}
-                place_reward = self.illegal_place_reward
-                pass
-            else:
-                raise error.Error(
-                    "Unsupported illegal place action: {}".format(
-                        self.illegal_place_mode
-                    )
-                )
+                ReversiEnv.make_place(self.state, action, self.player_color)
+        # 没有合法落子点时，action 为‘pass’ 正确，否则惩罚
         else:
-            ReversiEnv.make_place(self.state, action, self.player_color)
+            if ReversiEnv.pass_place(self.board_size, action):
+                place_reward = self.valid_place_reward
+            else:
+                place_reward = self.illegal_place_reward
 
         # Opponent play
         a = self.opponent_policy(self.state, 1 - self.player_color)
@@ -180,50 +169,39 @@ class ReversiEnv(gym.Env):
         # Making place if there are places left
         if a is not None:
             if ReversiEnv.pass_place(self.board_size, a):
-                # 让对手无处可下，奖励2分
+                # 让对手无处可下
                 # return self.state, 2.0, False, truncated, {"state": self.state}
                 pass
-            # elif ReversiEnv.resign_place(self.board_size, a):
-            #     return self.state, 1, True, truncated, {"state": self.state}
-            elif not ReversiEnv.valid_place(self.state, a, 1 - self.player_color):
-                if self.illegal_place_mode == "raise":
-                    raise
-                elif self.illegal_place_mode == "lose":
-                    # Automatic loss on illegal place
-                    # self.done = True
-                    # self.done = False
-                    # return self.state, 1.0, self.done, truncated, {"state": self.state}
-                    pass
-                else:
-                    raise error.Error(
-                        "Unsupported illegal place action: {}".format(
-                            self.illegal_place_mode
-                        )
-                    )
+            if not ReversiEnv.valid_place(self.state, a, 1 - self.player_color):
+                # Automatic loss on illegal place
+                # self.done = False
+                # return self.state, 1.0, self.done, truncated, {"state": self.state}
+                pass
             else:
                 ReversiEnv.make_place(self.state, a, 1 - self.player_color)
 
-        self.possible_actions = ReversiEnv.get_possible_actions(
-            self.state, self.player_color
-        )
+        self.possible_actions = ReversiEnv.get_possible_actions(self.state, self.player_color)
 
         score_diff_after = ReversiEnv.get_score_diff(self.state)
         curr_score = score_diff_after - score_diff_before
 
-        game_finish_flag = ReversiEnv.game_finished(self.state)
-        if game_finish_flag == 1:
-            reward = score_diff_before + self.winner_reward
-        elif game_finish_flag == -1:
-            reward = score_diff_before - self.winner_reward
+        game_finish_reward = ReversiEnv.game_finished(self.state)
+        if game_finish_reward == 1:
+            reward = score_diff_after + self.winner_reward
+        elif game_finish_reward == -1:
+            reward = score_diff_after - self.winner_reward
         else:
             reward = curr_score
 
+        if self.only_game_finished_reward:
+            reward = game_finish_reward
         if self.player_color == ReversiEnv.WHITE:
             reward = -reward
 
-        reward += place_reward
+        if not self.only_game_finished_reward:
+            reward += place_reward
 
-        self.done = game_finish_flag != 0
+        self.done = game_finish_reward != 0
         info = self._get_info()
         return self.state, reward, self.done, truncated, info
 
@@ -270,14 +248,6 @@ class ReversiEnv(gym.Env):
     def _get_info(self):
         return {"state": self.state}
 
-    # @staticmethod
-    # def pass_place(board_size, action):
-    #     return action == board_size ** 2
-
-    @staticmethod
-    def resign_place(board_size, action):
-        return action == board_size**2+1
-
     @staticmethod
     def pass_place(board_size, action):
         return action == board_size**2
@@ -310,8 +280,8 @@ class ReversiEnv(gym.Env):
                             ny += dy
                         if n > 0 and board[player_color, nx, ny] == 1:
                             actions.append(pos_x * d + pos_y)
-        if len(actions) == 0:
-            actions = [d**2 + 1]
+        # if len(actions) == 0:
+        #     actions = [d**2]
         return actions
 
     @staticmethod
@@ -346,21 +316,19 @@ class ReversiEnv(gym.Env):
 
     @staticmethod
     def valid_place(board, action, player_color):
+        d = board.shape[-1]
+        if action >= d**2:
+            return False
         coords = ReversiEnv.action_to_coordinate(board, action)
         # check whether there is any empty places
-        try:
-            if board[2, coords[0], coords[1]] == 1:
-                # check whether there is any reversible places
-                if ReversiEnv.valid_reverse_opponent(board, coords, player_color):
-                    return True
-                else:
-                    return False
+        if board[2, coords[0], coords[1]] == 1:
+            # check whether there is any reversible places
+            if ReversiEnv.valid_reverse_opponent(board, coords, player_color):
+                return True
             else:
                 return False
-        except:
-            print(f"index out of bound, action：{action}，coords:{coords}")
+        else:
             return False
-
 
     @staticmethod
     def make_place(board, action, player_color):
