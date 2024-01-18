@@ -25,18 +25,23 @@ def make_random_policy(np_random):
 
     return random_policy
 
+def make_model_policy(model):
+    def model_policy(observation, player_color=None):
+        action, _states = model.predict(observation, deterministic=False)
+        return action
+    return model_policy
+
+
 class ReversiEnv(gym.Env):
     """
     Reversi environment. Play against a fixed opponent.
     """
-
     BLACK = 0
     WHITE = 1
     metadata = {"render.modes": ["ansi", "human"]}
 
     def __init__(self, opponent, is_train=True, board_size=8, player_color='black',
-                 replace_invalid_action=False, only_game_finished_reward=True, verbose=0,
-                 valid_place_reward=1, illegal_place_reward=-2, winner_reward=10
+                 is_finished_reward=True, verbose=0
                  ):
         """
         Args:
@@ -44,28 +49,25 @@ class ReversiEnv(gym.Env):
             is_train: 是否为训练模式，如果是训练模式，player_color 可不设置
             board_size: size of the Reversi board
             player_color: Stone color for the agent. Either 'black' or 'white'
-            replace_invalid_action: 是否将非法行动作替换为随机合法动作
-            only_game_finished_reward: 是否只有游戏结束才能获得奖励
+            is_finished_reward: 是否只有游戏结束才能获得奖励，
+                True：当游戏结束时根据胜负得到[-1, 0, 1]奖励，其他情况奖励为0
+                False：每一轮走子后根据双方落子数给出[-1, 1]之间的奖励
             TODO:
                 1.设置二维 observation 为初始盘面状态，通过转换函数转换成模型输入self.state
-                2.主玩家可支持2中颜色            [Done]
-                3.self.observation 中添加可行位置
+                2.主玩家可支持2中颜色               [Done]
+                3.self.observation 中添加可行位置  [Done]
                 4.模型保存及部署
+                5.多环境训练                      [Done]
+                6.支持训练对手为模型               [Done]
+                7.训练对手策略优化 如果对手出现非法落子，使用随机可行落子点替换  [Done]
         """
         assert (
             isinstance(board_size, int) and board_size >= 3
         ), "Invalid board size: {}".format(board_size)
         self.board_size = board_size
         self.is_train = is_train
-        self.only_game_finished_reward = only_game_finished_reward
-        self.replace_invalid_action = replace_invalid_action
+        self.is_finished_reward = is_finished_reward
         self.verbose = verbose
-        # 合法落子奖励
-        self.valid_place_reward = valid_place_reward
-        # 非法落子惩罚
-        self.illegal_place_reward = illegal_place_reward
-        # 最终游戏输赢的额外回报
-        self.winner_reward = winner_reward
 
         # 颜色的棋子，X-黑棋，O-白棋, '.'  # 未落子状态
         self.render_black = 'X'  # 'B'
@@ -93,10 +95,10 @@ class ReversiEnv(gym.Env):
         self.WIDTH = self.board_size
         self.observation_space = spaces.Box(low=0, high=1, shape=(self.N_CHANNELS, self.HEIGHT, self.WIDTH),
                                             dtype=np.uint8)
-        self.seed()
+        self.init_opponent()
         observation, info = self.reset()
 
-    def seed(self, seed=None):
+    def init_opponent(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
 
         # Update the random policy if needed
@@ -108,13 +110,13 @@ class ReversiEnv(gym.Env):
                     "Unrecognized opponent policy {}".format(self.opponent)
                 )
         else:
-            self.opponent_policy = self.opponent
+            self.opponent_policy = make_model_policy(self.opponent)
 
         return [seed]
 
     def reset(self, seed=None, options=None):
         if self.verbose >= 1:
-            print(f" --- episode start --- ")
+            print(f"\n --- episode start --- \n")
         # init board setting
         # channels： 0: 黑棋位置， 1: 白棋位置， 2: 当前可合法落子位置，3：player 颜色
         self.observation = np.zeros((self.N_CHANNELS, self.board_size, self.board_size), dtype=int)
@@ -146,8 +148,14 @@ class ReversiEnv(gym.Env):
         # print(f"self.observation 1:{self.observation}")
         # Let the opponent play if it's not the agent's turn
         if self.player_color != self.to_play:
-            a = self.opponent_policy(self.observation, self.to_play)
-            ReversiEnv.make_place(self.observation, a, ReversiEnv.BLACK)
+            # 如果对手玩家不是随机玩家，需要设置玩家合法位置
+            if self.opponent != "random":
+                possible_actions = ReversiEnv.get_possible_actions(self.observation, self.to_play)
+                # 设置对手玩家合法位置
+                ReversiEnv.set_possible_actions_place(self.observation, possible_actions)
+            _opponent_action = self.opponent_policy(self.observation, self.to_play)
+            self._action_handler(_opponent_action, self.to_play)
+            # ReversiEnv.make_place(self.observation, _opponent_action, ReversiEnv.BLACK)
             self.to_play = ReversiEnv.WHITE
             self.possible_actions = ReversiEnv.get_possible_actions(self.observation, self.to_play)
             if self.verbose >= 1:
@@ -158,120 +166,72 @@ class ReversiEnv(gym.Env):
         ReversiEnv.set_possible_actions_place(self.observation, self.possible_actions)
         # print(f"self.observation 3:{self.observation}")
 
-        info = self._get_info()
+        # info = self._get_info()
+        info = {}
         return self.observation, info
 
     def step(self, action):
         assert self.to_play == self.player_color
         truncated = False
+        info = {}
         # If already terminal, then don't do anything
         if self.done:
-            return self.observation, 0.0, True, truncated, {"state": self.observation}
-
-        # score_diff_before = ReversiEnv.get_score_diff(self.observation)
-        if self.verbose >= 1:
-            print(f"step start: ")
-            self.render("human")
-            print(f"self.possible_actions: {self.possible_actions}")
-            possible_actions_coords = [ReversiEnv.action_to_coordinate(self.observation, _action) for _action in self.possible_actions]
-            print(f"possible_actions coords: {possible_actions_coords}")
-
-        if self.verbose >= 1:
-            coords = ReversiEnv.action_to_coordinate(self.observation, action)
-            print(f" player action: {action}, coords: {coords}, self.player_color: {self.player_color}")
-        # 有合法落子点时
-        if len(self.possible_actions) > 0:
-            # action 为非法落子
-            if not ReversiEnv.valid_place(self.observation, action, self.player_color):
-                if self.replace_invalid_action:
-                    a_index = self.np_random.integers(len(self.possible_actions))
-                    _action = self.possible_actions[a_index]
-                    if self.verbose >= 1:
-                        coords = ReversiEnv.action_to_coordinate(self.observation, _action)
-                        print(f" replace_invalid_action, action: {_action}, coords: {coords}")
-                    ReversiEnv.make_place(self.observation, _action, self.player_color)
-                else:
-                    return self.observation, -1.0, True, truncated, {"state": self.observation}
-            # action 为合法落子
-            else:
-                ReversiEnv.make_place(self.observation, action, self.player_color)
-            if self.verbose >= 1:
-                self.render("human")
-        # 没有合法落子点时，action 为‘pass’ 正确，否则结束
-        else:
-            if ReversiEnv.pass_place(self.board_size, action):
-                if self.verbose >= 1:
-                    print(f"=> pass_place, action valid, action: {action}")
-                pass
-            else:
-                if self.replace_invalid_action:
-                    action = self.observation.shape[-1] ** 2
-                else:
-                    return self.observation, -1.0, True, truncated, {"state": self.observation}
-
-        # Opponent play
-        a = self.opponent_policy(self.observation, 1 - self.player_color)
-        if self.verbose >= 1:
-            coords = ReversiEnv.action_to_coordinate(self.observation, a)
-            print(f" opponent_policy action: {a}, coords: {coords}, player_color: {1 - self.player_color}")
-        # Making place if there are places left
-        if a is not None:
-            if ReversiEnv.pass_place(self.board_size, a):
-                pass
-            elif not ReversiEnv.valid_place(self.observation, a, 1 - self.player_color):
-                # Automatic loss on illegal place
-                if self.verbose >= 1:
-                    print(f" ** opponent_policy action invalid, action: {a}")
-                return self.observation, 1.0, True, truncated, {"state": self.observation}
-            else:
-                ReversiEnv.make_place(self.observation, a, 1 - self.player_color)
+            return self.observation, 0.0, True, truncated, info
 
         self.possible_actions = ReversiEnv.get_possible_actions(self.observation, self.player_color)
         # 设置主玩家合法位置
         ReversiEnv.set_possible_actions_place(self.observation, self.possible_actions)
 
-        is_done, game_reward, score_diff = self.game_finished(self.observation)
+        if self.verbose >= 1:
+            print(f"\n step start: ")
+            self.render("human")
+            possible_actions_coords = [ReversiEnv.action_to_coordinate(self.observation, _action) for _action in
+                                       self.possible_actions]
+            print(f"self.possible_actions: {self.possible_actions}, coords: {possible_actions_coords}")
 
-        # player_score, opponent_score, score_diff = ReversiEnv.get_score_diff(self.observation)
-        # # 黑子相对于本轮开始增加的棋子数
-        # curr_score = score_diff_after - score_diff_before
-        # if game_finish_reward == 1:
-        #     reward = score_diff_after + self.winner_reward
-        # elif game_finish_reward == -1:
-        #     reward = score_diff_after - self.winner_reward
-        # else:
-        #     reward = curr_score
+        # self play
+        is_action_valid = self._action_handler(action, self.player_color)
+        if not is_action_valid:
+            if self.verbose >= 1:
+                self.render("human")
+                print(f"step end, reward: {-1}, done: {self.done}")
+                black_score, white_score, _score_diff = ReversiEnv.get_score_diff(self.observation)
+                print(f"black_score: {black_score}, white_score: {white_score}, score_diff: {_score_diff}")
+            return self.observation, -1.0, True, truncated, info
 
-        if self.only_game_finished_reward:
-            reward = game_reward
+        # Opponent play
+        # 如果对手玩家不是随机玩家，需要设置玩家合法位置
+        if self.opponent != "random":
+            possible_actions = ReversiEnv.get_possible_actions(self.observation, 1-self.player_color)
+            # 设置对手玩家合法位置
+            ReversiEnv.set_possible_actions_place(self.observation, possible_actions)
+
+        opponent_action = self.opponent_policy(self.observation, 1 - self.player_color)
+        self._action_handler(opponent_action, 1 - self.player_color)
+
+        is_done, reward, score_diff = self.game_finished(self.observation)
+        # 若本轮结束，直接获得最终奖励
+        if not is_done:
+            if not self.is_finished_reward:
+                reward = score_diff/(self.board_size**2/2)
 
         if self.player_color == ReversiEnv.WHITE:
             reward = -reward
 
         self.done = is_done
-        info = self._get_info()
+        # info = self._get_info()
 
         if self.verbose >= 1:
             self.render("human")
-            print(f"step end")
-            print(f"reward: {reward}, done: {self.done}")
+            print(f"step end, reward: {reward}, done: {self.done}")
             black_score, white_score, _score_diff = ReversiEnv.get_score_diff(self.observation)
-            print(f"black_score: {black_score}, white_score: {white_score}, score_diff: {score_diff}")
-            print(f"self.possible_actions: {self.possible_actions}")
-            # possible_actions = [ReversiEnv.action_to_coordinate(self.observation, _action) for _action in self.possible_actions]
-            # print(f"possible_actions coords: {possible_actions}")
+            print(f"black_score: {black_score}, white_score: {white_score}, score_diff: {score_diff} \n")
             info = {"reward": reward,
                     "black_score": black_score,
                     "white_score": white_score,
                     "score_diff": score_diff
                     }
         return self.observation, reward, self.done, truncated, info
-
-    # def _reset_opponent(self):
-    #     if self.opponent == 'random':
-    #         self.opponent_policy = random_policy
-    #     else:
-    #         raise error.Error('Unrecognized opponent policy {}'.format(self.opponent))
 
     def render(self, mode="human", close=False):
         if close:
@@ -310,6 +270,49 @@ class ReversiEnv(gym.Env):
     def _get_info(self):
         return {"state": self.observation}
 
+    def _action_handler(self, action, player_color):
+        is_action_valid = True
+        if self.verbose >= 1:
+            coords = ReversiEnv.action_to_coordinate(self.observation, action)
+            print(f"player_color: {player_color} /(self.player_color: {self.player_color}), action: {action}, coords: {coords}")
+
+        possible_actions = self.possible_actions
+        if player_color != self.player_color:
+            possible_actions = ReversiEnv.get_possible_actions(self.observation, player_color)
+
+        # 当前player有合法落子点时
+        if len(possible_actions) > 0:
+            # action 为非法落子
+            if not ReversiEnv.valid_place(self.observation, action, player_color):
+                # 将非法落子替换为随机合法落子条件：1.player 是对手， 2. 非训练场景
+                if (player_color != self.player_color) or (not self.is_train):
+                    action_index = self.np_random.integers(len(possible_actions))
+                    _action = possible_actions[action_index]
+                    ReversiEnv.make_place(self.observation, _action, player_color)
+                    if self.verbose >= 1:
+                        coords = ReversiEnv.action_to_coordinate(self.observation, _action)
+                        print(f" replace invalid action with: {_action}, coords: {coords}")
+                else:
+                    is_action_valid = False
+            # action 为合法落子
+            else:
+                ReversiEnv.make_place(self.observation, action, player_color)
+            if self.verbose >= 1:
+                self.render("human")
+        # 没有合法落子点时，action 为‘pass’ 正确，否则结束
+        else:
+            if ReversiEnv.pass_place(self.board_size, action):
+                if self.verbose >= 1:
+                    print(f"=> pass_place, action valid, action: {action}")
+                pass
+            else:
+                # 没有合法落子点时，且action 不是‘pass’，非法落子判断条件：1.训练场景，且 player 是自己
+                if self.is_train and (player_color == self.player_color):
+                    is_action_valid = False
+        if self.verbose >= 1:
+            print(f" is_action_valid: {is_action_valid}, player_color: {player_color}/(self.player_color: {self.player_color})")
+        return is_action_valid
+
     @staticmethod
     def pass_place(board_size, action):
         return action == board_size**2
@@ -344,8 +347,6 @@ class ReversiEnv(gym.Env):
                             action = pos_x * d + pos_y
                             if action not in actions:
                                 actions.append(action)
-        # if len(actions) == 0:
-        #     actions = [d**2]
         return actions
 
     @staticmethod
@@ -465,7 +466,6 @@ class ReversiEnv(gym.Env):
         elif opponent_score == 0:
             is_done = True
         else:
-            # free_x, free_y = np.where(board[2, :, :] == 1)
             if (player_score + opponent_score) == d**2:
                 # 棋盘已被占满
                 is_done = True
