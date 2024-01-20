@@ -155,11 +155,11 @@ class Game:
                     winner, diff, error = self.force_loss(type='legal')
                     execption = RuntimeError("invalid move after 3 retires!")
                     break
-            except FunctionTimedOut as e:
+            #except FunctionTimedOut as e:
                 # 落子超时，结束游戏
-                execption = e
-                winner, diff, error = self.force_loss(type='timeout')
-                break
+            #    execption = e
+            #    winner, diff, error = self.force_loss(type='timeout')
+            #    break
 
             except Exception as e:
                 execption = e

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 from sdk import RandomPlayer
 from sdk import Game
+from my_player import MyPlayer
 
 import importlib
 import datetime
 
 if __name__ == '__main__': 
-    player1 = RandomPlayer('X')
-    player2 = RandomPlayer('O')
+    player1 = MyPlayer('O')
+    # player1 = RandomPlayer('X')
+    player2 = RandomPlayer('X')
     game = Game(player1, player2)
 
     start = datetime.datetime.now()

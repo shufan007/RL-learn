@@ -40,16 +40,14 @@ class ReversiEnv(gym.Env):
     WHITE = 1
     metadata = {"render.modes": ["ansi", "human"]}
 
-    def __init__(self, opponent, is_train=True, board_size=8, player_color='black',
-                 is_finished_reward=True, verbose=0
-                 ):
+    def __init__(self, opponent, is_train=True, board_size=8, player_color='black', greedy_rate=0, verbose=0):
         """
         Args:
             opponent: An opponent policy
             is_train: 是否为训练模式，如果是训练模式，player_color 可不设置
             board_size: size of the Reversi board
             player_color: Stone color for the agent. Either 'black' or 'white'
-            is_finished_reward: 是否只有游戏结束才能获得奖励，
+            greedy_rate: 贪心奖励比率，大于0时使用贪心比率，值越大越即时奖励越大
                 True：当游戏结束时根据胜负得到[-1, 0, 1]奖励，其他情况奖励为0
                 False：每一轮走子后根据双方落子数给出[-1, 1]之间的奖励
             TODO:
@@ -60,13 +58,19 @@ class ReversiEnv(gym.Env):
                 5.多环境训练                      [Done]
                 6.支持训练对手为模型               [Done]
                 7.训练对手策略优化 如果对手出现非法落子，使用随机可行落子点替换  [Done]
+
+                尝试 CnnPolicy
+                尝试其他训练算法
+                调参
+                探索多线程参数
+                多帧向量输入
         """
         assert (
             isinstance(board_size, int) and board_size >= 3
         ), "Invalid board size: {}".format(board_size)
         self.board_size = board_size
         self.is_train = is_train
-        self.is_finished_reward = is_finished_reward
+        self.greedy_rate = greedy_rate
         self.verbose = verbose
 
         # 颜色的棋子，X-黑棋，O-白棋, '.'  # 未落子状态
@@ -95,8 +99,10 @@ class ReversiEnv(gym.Env):
         self.WIDTH = self.board_size
         self.observation_space = spaces.Box(low=0, high=1, shape=(self.N_CHANNELS, self.HEIGHT, self.WIDTH),
                                             dtype=np.uint8)
+
+        self.observation = np.zeros((self.N_CHANNELS, self.board_size, self.board_size), dtype=np.uint8)
+        # observation, info = self.reset()
         self.init_opponent()
-        observation, info = self.reset()
 
     def init_opponent(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -119,7 +125,7 @@ class ReversiEnv(gym.Env):
             print(f"\n --- episode start --- \n")
         # init board setting
         # channels： 0: 黑棋位置， 1: 白棋位置， 2: 当前可合法落子位置，3：player 颜色
-        self.observation = np.zeros((self.N_CHANNELS, self.board_size, self.board_size), dtype=int)
+        self.observation = np.zeros((self.N_CHANNELS, self.board_size, self.board_size), dtype=np.uint8)
 
         # 训练模式下，每次棋盘重置时都随机生成主玩家颜色
         if self.is_train:
@@ -184,20 +190,22 @@ class ReversiEnv(gym.Env):
 
         if self.verbose >= 1:
             print(f"\n step start: ")
-            self.render("human")
+            # self.render("human")
             possible_actions_coords = [ReversiEnv.action_to_coordinate(self.observation, _action) for _action in
                                        self.possible_actions]
             print(f"self.possible_actions: {self.possible_actions}, coords: {possible_actions_coords}")
 
+        player_score, opponent_score, score_diff_before = ReversiEnv.get_score_diff(self.observation)
         # self play
         is_action_valid = self._action_handler(action, self.player_color)
         if not is_action_valid:
+            self.done = True
             if self.verbose >= 1:
                 self.render("human")
                 print(f"step end, reward: {-1}, done: {self.done}")
                 black_score, white_score, _score_diff = ReversiEnv.get_score_diff(self.observation)
                 print(f"black_score: {black_score}, white_score: {white_score}, score_diff: {_score_diff}")
-            return self.observation, -1.0, True, truncated, info
+            return self.observation, -1.0, self.done, truncated, info
 
         # Opponent play
         # 如果对手玩家不是随机玩家，需要设置玩家合法位置
@@ -212,8 +220,11 @@ class ReversiEnv(gym.Env):
         is_done, reward, score_diff = self.game_finished(self.observation)
         # 若本轮结束，直接获得最终奖励
         if not is_done:
-            if not self.is_finished_reward:
-                reward = score_diff/(self.board_size**2/2)
+            prompt_reward = score_diff - score_diff_before
+            reward = self.greedy_rate*(prompt_reward/(self.board_size**2/2))
+            reward = min(max(reward, -1), 1)
+            if self.verbose >= 1:
+                print(f"reward: {reward}, prompt_reward: {prompt_reward}")
 
         if self.player_color == ReversiEnv.WHITE:
             reward = -reward
