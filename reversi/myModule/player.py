@@ -5,7 +5,7 @@ import random
 import torch
 
 
-class MyReversiPlayer:
+class MyPlayer:
     """
     """
     def __init__(self, color):
@@ -134,7 +134,7 @@ class MyReversiPlayer:
                 if board._board[i][j] != self.empty:
                     index = self.colormap[board._board[i][j]]
                     observation[index, i, j] = 1
-        possible_actions = MyReversiPlayer.get_possible_actions(observation, self.player_color)
+        possible_actions = MyPlayer.get_possible_actions(observation, self.player_color)
         # print(f"possible_actions ---1---: {possible_actions}")
         possible_actions = self.get_possible_actions_from_boad(board)
         # print(f"possible_actions ---2---: {possible_actions}")

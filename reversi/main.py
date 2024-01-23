@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from sdk import RandomPlayer
 from sdk import Game
-from my_player import MyPlayer
+from myModule import MyPlayer
 
 import importlib
 import datetime

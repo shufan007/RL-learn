@@ -25,6 +25,7 @@ def make_random_policy(np_random):
 
     return random_policy
 
+
 def make_model_policy(model):
     def model_policy(observation, player_color=None):
         action, _states = model.predict(observation, deterministic=False)
