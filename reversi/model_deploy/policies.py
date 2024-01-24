@@ -20,23 +20,22 @@ from .distributions import (
     StateDependentNoiseDistribution,
     make_proba_distribution,
 )
-from .preprocessing import preprocess_obs
 from .torch_layers import (
     BaseFeaturesExtractor,
     FlattenExtractor,
     MlpExtractor,
     NatureCNN,
 )
-from stable_baselines3.common.type_aliases import PyTorchObs, Schedule
-from stable_baselines3.common.utils import get_device, is_vectorized_observation, obs_as_tensor
+
+from .utils import get_device, obs_as_tensor
+from .preprocessing import preprocess_obs
 
 TensorDict = Dict[str, th.Tensor]
 OptimizerStateDict = Dict[str, Any]
-PyTorchObs = Union[th.Tensor, TensorDict]
 
-# A schedule takes the remaining progress as input
-# and ouputs a scalar (e.g. learning rate, clip range, ...)
+"""Common aliases for type hints"""
 Schedule = Callable[[float], float]
+PyTorchObs = Union[th.Tensor, TensorDict]
 
 SelfBaseModel = TypeVar("SelfBaseModel", bound="BaseModel")
 
@@ -47,15 +46,16 @@ class CustomCNN(nn.Module):
     :param features_dim: (int) Number of features extracted.
         This corresponds to the number of unit for the last layer.
     """
-    # observation_space: spaces.Box
-    def __init__(self, observation_space, features_dim: int = 256,
+
+    def __init__(self, observation_space=(4, 8, 8), features_dim: int = 256,
                  net_arch=[32, 64, 128], kernel_size=3, stride=1, padding='same', is_batch_norm=False):
         super(CustomCNN, self).__init__()
-        # We assume CxHxW images (channels first)
-        # Re-ordering will be done by pre-preprocessing or wrapper
+
         self._observation_space = observation_space
         self._features_dim = features_dim
-        
+
+        # We assume CxHxW images (channels first)
+        # Re-ordering will be done by pre-preprocessing or wrapper
         n_input_channels = observation_space[0]
         stride_list = stride
         if isinstance(stride, int):
@@ -101,13 +101,11 @@ class CustomCNN(nn.Module):
         self.cnn = nn.Sequential(* conv_module_list)
 
         # Compute shape by doing one forward pass
-        # 自动推导 n_flatten
         # with th.no_grad():
         #     n_flatten = self.cnn(
         #         th.as_tensor(observation_space.sample()[None]).float()
         #     ).shape[1]
 
-        # 手动计算
         n_flatten = observation_space[1] * observation_space[2] * net_arch[-1]
 
         self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
@@ -115,11 +113,10 @@ class CustomCNN(nn.Module):
     @property
     def features_dim(self) -> int:
         return self._features_dim
-    
+
     def forward(self, observations: th.Tensor) -> th.Tensor:
         return self.linear(self.cnn(observations))
-    
-    
+
 class BaseModel(nn.Module):
     """
     The base model object: makes predictions in response to observations.
@@ -146,8 +143,8 @@ class BaseModel(nn.Module):
 
     def __init__(
         self,
-        observation_space,
-        action_space,
+        observation_space=(4, 8, 8),
+        action_space=[64],
         features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
         features_extractor_kwargs: Optional[Dict[str, Any]] = None,
         features_extractor: Optional[BaseFeaturesExtractor] = None,
@@ -212,6 +209,7 @@ class BaseModel(nn.Module):
         :return: The extracted features
         """
         preprocessed_obs = preprocess_obs(obs, self.observation_space, normalize_images=self.normalize_images)
+        # print(f"preprocessed_obs: {preprocessed_obs}")
         return features_extractor(preprocessed_obs)
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
@@ -303,7 +301,6 @@ class BaseModel(nn.Module):
         """
         vectorized_env = True
         observation = np.array(observation)
-
         if not isinstance(observation, dict):
             # Add batch dimension if needed
             observation = observation.reshape((-1, *self.observation_space))  # type: ignore[misc]
@@ -435,7 +432,6 @@ class BasePolicy(BaseModel, ABC):
         """
         low, high = 0, self.action_space[0]
         return low + (0.5 * (scaled_action + 1.0) * (high - low))
-
 
 class ActorCriticPolicy(BasePolicy):
     """
@@ -655,7 +651,6 @@ class ActorCriticPolicy(BasePolicy):
         # Setup optimizer with initial learning rate
         # self.optimizer = self.optimizer_class(self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs)  # type: ignore[call-arg]
         self.optimizer = None
-
 
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """

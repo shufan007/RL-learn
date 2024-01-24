@@ -12,7 +12,14 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 from gym_reversi import ReversiEnv
-from utils import time2str
+# from utils import time2str
+from datetime import datetime
+
+
+def time2str(timestamp):
+    d = datetime.fromtimestamp(timestamp)
+    timestamp_str = d.strftime('%Y-%m-%d %H:%M:%S')
+    return timestamp_str
 
 
 class CustomCNN(BaseFeaturesExtractor):
@@ -123,15 +130,15 @@ class ReversiModelTrain(object):
         # set policy model configs
         policy_kwargs = dict(
             features_extractor_class=CustomCNN,
-            features_extractor_kwargs=dict(features_dim=1024,
-                                           net_arch=[64, 128, 256],
+            features_extractor_kwargs=dict(features_dim=256,
+                                           # net_arch=[64, 128, 256],
                                            # net_arch=[64, 128, 128],
-                                           # net_arch=[32, 64, 128],
+                                           net_arch=[32, 64, 64],
                                            kernel_size=3,
                                            stride=1,
                                            padding='same',
                                            is_batch_norm=False),
-            net_arch=[256, 512],
+            net_arch=[256, 256],
             normalize_images=False
         )
 
@@ -143,11 +150,11 @@ class ReversiModelTrain(object):
                           policy_kwargs=policy_kwargs,
                           learning_rate=3e-4,  # learning_rate=2.5e-4,
                           ent_coef=0.01,
-                          n_steps=128, # n_steps=128,
+                          n_steps=32, # n_steps=128,
                           n_epochs=4,
                           batch_size=64, # batch_size=256,
                           gamma=0.9,
-                          gae_lambda=0.9,
+                          gae_lambda=0.8,
                           clip_range=0.2,
                           vf_coef=0.5,
                           verbose=1,
@@ -239,6 +246,8 @@ def transfer_policy_model_to_state_dict(model_path):
     model = PPO.load(model_path)
     th.save(model.policy.state_dict(), model_path + '_state_dict.pt')
 
+def load_state_dict(policy_model, state_dict_path):
+    policy_model.load_state_dict(torch.load(state_dict_path))
 
 def task_args_parser(argv, usage=None):
     """
@@ -278,8 +287,6 @@ def run_train(argv):
     start_index = args.start_index
     check_point_timesteps = args.cp_timesteps
     opponent_model_path = args.opponent_model_path
-    tensorboard_log = f"models/ppo_{board_size}x{board_size}_cnn/"
-
     tensorboard_log = f"models/ppo_{board_size}x{board_size}_cnn/"
     # tensorboard_log = os.path.join(base_path, tensorboard_log)
 
