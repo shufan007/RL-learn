@@ -7,9 +7,9 @@ import importlib
 import datetime
 
 if __name__ == '__main__': 
-    player1 = MyPlayer('O')
+    player1 = MyPlayer('X')
     # player1 = RandomPlayer('X')
-    player2 = RandomPlayer('X')
+    player2 = RandomPlayer('O')
     game = Game(player1, player2)
 
     start = datetime.datetime.now()

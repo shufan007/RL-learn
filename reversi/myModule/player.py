@@ -3,6 +3,7 @@ import os
 import numpy as np
 import random
 import torch
+from .model_deploy.policies import CustomCNN, ActorCriticPolicy
 
 
 class MyPlayer:
@@ -22,15 +23,44 @@ class MyPlayer:
         self.board_size = 8
         self.player_color = self.colormap[color]
         self.observation_channels = 4
+        self.model = self._load_model()
 
+    def _load_model(self):
         current_path = os.path.dirname(os.path.abspath(__file__))
         # print(f"current_path: {current_path}")
-        model_path = os.path.join(current_path, 'model.pth')
-        self.model = self._get_model(model_path)
+        model_path = os.path.join(current_path, 'model_state_dict.pt')
 
-    def _get_model(self, model_path):
-        model = torch.load(model_path)
-        return model
+        observation_space = (4, 8, 8)
+        action_space = [observation_space[1] * observation_space[2]]
+
+        features_extractor_kwargs = dict(features_dim=256,
+                                         # net_arch=[64, 128, 256],
+                                         # net_arch=[64, 128, 128],
+                                         #  net_arch=[32, 64, 128],
+                                         net_arch=[32, 64, 64],
+                                         kernel_size=3,
+                                         stride=1,
+                                         padding='same',
+                                         is_batch_norm=False
+                                         )
+
+        policy_model = ActorCriticPolicy(
+            observation_space=observation_space,
+            action_space=action_space,
+            net_arch=[256, 256],
+            features_extractor_class=CustomCNN,
+            features_extractor_kwargs=features_extractor_kwargs,
+            share_features_extractor=True,
+            normalize_images=False
+
+        )
+
+        # device = torch.device('cpu')
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+        policy_model.load_state_dict(torch.load(model_path, map_location=device))
+        policy_model.eval()
+        return policy_model
 
     def get_move(self, board):
         """
@@ -40,13 +70,16 @@ class MyPlayer:
         """
         observation, possible_actions = self._get_observation(board)
         _action, _states = self.model.predict(observation, deterministic=True)
+        print(f"possible_actions:{possible_actions}")
+        print(f"_action 1:{_action}")
+        _action = int(_action)
         if len(possible_actions) > 0:
             if _action not in possible_actions:
                 _action = random.choice(possible_actions)
         elif _action < self.board_size**2:
             _action = self.board_size**2
 
-        # print(f"_action:{_action}")
+        print(f"_action 2:{_action}")
         _action_coords = self.action_to_coordinate(_action)
         action = self.num_board(_action_coords)
         # print(f"action:{action}")
