@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+from shutil import copyfile
 import numpy as np
 import torch as th
 import torch.nn as nn
@@ -37,8 +38,16 @@ def mask_fn(env: gym.Env) -> np.ndarray:
 
 
 class ReversiModelTrain(object):
-    def __init__(self, board_size=8, backbone='cnn', check_point_timesteps=100000, n_envs=8, model_path=None,
-                 opponent_model_path="random", tensorboard_log=None, verbose=0):
+    def __init__(self, board_size=8,
+                 backbone='cnn',
+                 check_point_timesteps=100000,
+                 n_envs=8,
+                 model_path=None,
+                 opponent_model_path="random",
+                 tensorboard_log=None,
+                 verbose=0,
+                 archive_timesteps=1000000,
+                 archive_path=None):
         self.board_size = board_size
         self.backbone = backbone
         self.check_point_timesteps = check_point_timesteps
@@ -49,6 +58,9 @@ class ReversiModelTrain(object):
         self.verbose = verbose
         # self.PolicyModel = PPO
         self.PolicyModel = MaskablePPO
+        self.archive_timesteps = archive_timesteps
+        self.archive_path = archive_path
+        print(f"self.archive_path: {self.archive_path}")
 
     def reversi_model_train_step(self, check_point_timesteps, save_model_path=None):
         if self.opponent_model_path != "random":
@@ -124,6 +136,16 @@ class ReversiModelTrain(object):
             save_model_path = os.path.join(self.tensorboard_log, model_str)
             _current_timestemps += self.check_point_timesteps
             self.reversi_model_train_step(self.check_point_timesteps, save_model_path)
+
+            print(f"self.archive_path: {self.archive_path}")
+            print(f"_current_timestemps: {_current_timestemps}, self.archive_timesteps: {self.archive_timesteps}")
+            if self.archive_path and (_current_timestemps % self.archive_timesteps ==0):
+                source = save_model_path+'.zip'
+                target = os.path.join(self.archive_path, model_str)
+                try:
+                    copyfile(source, target)
+                except IOError as e:
+                    print("Unable to copy file. %s" % e)
 
     def sb3_model_to_pth_model(self, PolicyModel, model_path):
         ppo_model = PolicyModel.load(model_path)
@@ -207,14 +229,15 @@ def task_args_parser(argv, usage=None):
 
     # env config
     parser.add_argument('--board_size', type=int, default=8, help="棋盘尺寸")
-    parser.add_argument('--backbone', type=str, default='backbone', help="特征提取骨干网络， [cnn, resnet]")
+    parser.add_argument('--backbone', type=str, default='cnn', help="特征提取骨干网络， [cnn, resnet]")
     parser.add_argument('--n_envs', type=int, default=4, help="并行环境个数")
-    parser.add_argument('--total_timesteps', type=int, default=10_0000, help="训练步数")
+    parser.add_argument('--total_timesteps', type=int, default=100_0000, help="训练步数")
     parser.add_argument('--cp_timesteps', type=int, default=10_0000, help="检查点步数")
     parser.add_argument('--start_index', type=int, default=0, help="本次训练开始index")
     parser.add_argument('--opponent_model_path', type=str, default='random', help='对手模型路径')
     parser.add_argument('--greedy_rate', type=int, default=0, help="贪心奖励比率，大于0时使用贪心比率，值越大越即时奖励越大")
-
+    parser.add_argument('--archive_timesteps', type=int, default=100_0000, help="存档训练步数")
+    parser.add_argument('--archive_path', type=str, default='/content/drive/MyDrive/models', help='存档模型路径')
     args = parser.parse_args()
     return args
 
@@ -222,7 +245,7 @@ def task_args_parser(argv, usage=None):
 def run_train(argv):
     usage = '''
     example:
-    python reversi_model_train.py --board_size 8 --total_timesteps 50000000 --cp_timesteps 200000 --n_envs 4 --opponent_model_path random --start_index 1000000
+    python reversi_model_train.py --backbone cnn --board_size 8 --total_timesteps 50000000 --cp_timesteps 200000 --n_envs 4 --opponent_model_path random --start_index 1000000
     python reversi_model_train.py --board_size 8 --total_timesteps 50000000 --cp_timesteps 200000 --n_envs 4 --opponent_model_path random --start_index 1000000
 
     '''
@@ -235,9 +258,11 @@ def run_train(argv):
     start_index = args.start_index
     check_point_timesteps = args.cp_timesteps
     opponent_model_path = args.opponent_model_path
+    archive_timesteps = args.archive_timesteps
+    archive_path = args.archive_path
     tensorboard_log = f"models/ppo_{board_size}x{board_size}_{backbone}/"
     # tensorboard_log = os.path.join(base_path, tensorboard_log)
-
+    print(f"archive_path: {archive_path}")
     if not os.path.isdir(tensorboard_log):
         os.makedirs(tensorboard_log)
     model_path = os.path.join(tensorboard_log, "model")
@@ -248,7 +273,9 @@ def run_train(argv):
                                   n_envs=n_envs,
                                   model_path=model_path,
                                   opponent_model_path=opponent_model_path,
-                                  tensorboard_log=tensorboard_log)
+                                  tensorboard_log=tensorboard_log,
+                                  archive_timesteps=archive_timesteps,
+                                  archive_path=archive_path)
 
     t0 = time.time()
     train_obj.reversi_model_train(total_timesteps, start_index)

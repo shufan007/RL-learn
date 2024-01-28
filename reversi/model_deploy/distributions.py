@@ -7,6 +7,7 @@ import numpy as np
 import torch as th
 from torch import nn
 from torch.distributions import Bernoulli, Categorical, Normal
+from torch.distributions.utils import logits_to_probs
 
 
 SelfDistribution = TypeVar("SelfDistribution", bound="Distribution")
