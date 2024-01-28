@@ -10,10 +10,18 @@ from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecFrameStack
 from stable_baselines3 import PPO
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
+from sb3_contrib.common.wrappers import ActionMasker
+from sb3_contrib.ppo_mask import MaskablePPO
 
 from gym_reversi import ReversiEnv
+from custom_feature_extractor import CustomCNN
+
 # from utils import time2str
 from datetime import datetime
+
+# PolicyModel = PPO
+# PolicyModel = MaskablePPO
 
 
 def time2str(timestamp):
@@ -21,90 +29,26 @@ def time2str(timestamp):
     timestamp_str = d.strftime('%Y-%m-%d %H:%M:%S')
     return timestamp_str
 
-
-class CustomCNN(BaseFeaturesExtractor):
-    """
-    :param observation_space: (gym.Space)
-    :param features_dim: (int) Number of features extracted.
-        This corresponds to the number of unit for the last layer.
-    """
-    # observation_space: spaces.Box
-    def __init__(self, observation_space: spaces.Box, features_dim: int = 256,
-                 net_arch=[32, 64, 128], kernel_size=3, stride=1, padding='same', is_batch_norm=False):
-        super().__init__(observation_space, features_dim)
-        # We assume CxHxW images (channels first)
-        # Re-ordering will be done by pre-preprocessing or wrapper
-        n_input_channels = observation_space.shape[0]
-        stride_list = stride
-        if isinstance(stride, int):
-            stride_list = [stride] * len(net_arch)
-
-        kernel_size_list = kernel_size
-        if isinstance(kernel_size, int):
-            kernel_size_list = [kernel_size] * len(net_arch)
-
-        # self.cnn = nn.Sequential(
-        #     nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-        #     nn.ReLU(),
-        #     nn.Flatten(),
-        # )
-
-        conv_module_list = nn.ModuleList()
-
-        in_channels = n_input_channels
-        for i in range(len(net_arch)):
-            out_channels = net_arch[i]
-            kernel_size = kernel_size_list[i]
-            stride = stride_list[i]
-            conv_block = [
-                nn.Conv2d(in_channels=in_channels,
-                          out_channels=out_channels,
-                          kernel_size=kernel_size,
-                          stride=stride,
-                          padding=padding),
-                # nn.BatchNorm2d(num_features=out_channels),
-                # nn.ReLU(),
-            ]
-
-            if is_batch_norm:
-                conv_block.append(nn.BatchNorm2d(num_features=out_channels))
-            conv_block.append(nn.ReLU())
-
-            conv_module_list.extend(conv_block)
-            in_channels = out_channels
-
-        conv_module_list.extend([nn.Flatten()])
-        self.cnn = nn.Sequential(* conv_module_list)
-
-        # Compute shape by doing one forward pass
-        # 自动推导 n_flatten
-        with th.no_grad():
-            n_flatten = self.cnn(
-                th.as_tensor(observation_space.sample()[None]).float()
-            ).shape[1]
-
-        # 手动计算
-        # n_flatten = observation_shape[1] * observation_shape[2] * net_arch[-1]
-
-        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
-
-    def forward(self, observations: th.Tensor) -> th.Tensor:
-        return self.linear(self.cnn(observations))
+def mask_fn(env: gym.Env) -> np.ndarray:
+    # Do whatever you'd like in this function to return the action mask
+    # for the current env. In this example, we assume the env has a
+    # helpful method we can rely on.
+    return env.valid_action_mask()
 
 
 class ReversiModelTrain(object):
-    def __init__(self, board_size=8, check_point_timesteps=100000, n_envs=16, model_path=None,
+    def __init__(self, board_size=8, backbone='cnn', check_point_timesteps=100000, n_envs=8, model_path=None,
                  opponent_model_path="random", tensorboard_log=None, verbose=0):
         self.board_size = board_size
+        self.backbone = backbone
         self.check_point_timesteps = check_point_timesteps
         self.n_envs = n_envs
         self.model_path = model_path
         self.opponent_model_path = opponent_model_path
         self.tensorboard_log = tensorboard_log
         self.verbose = verbose
-        self.PolicyModel = PPO
+        # self.PolicyModel = PPO
+        self.PolicyModel = MaskablePPO
 
     def reversi_model_train_step(self, check_point_timesteps, save_model_path=None):
         if self.opponent_model_path != "random":
@@ -112,9 +56,10 @@ class ReversiModelTrain(object):
         else:
             opponent_model = "random"
 
-        env = ReversiEnv(opponent=opponent_model, is_train=True, board_size=self.board_size,
+        env = ReversiEnv(opponent=opponent_model, is_train=True, board_size=self.board_size, n_channels=4,
                          greedy_rate=0, verbose=self.verbose)
 
+        # env = ActionMasker(env, mask_fn)  # Wrap to enable masking
         vec_env = env
         if self.n_envs > 1:
             # multi-worker training (n_envs=4 => 4 environments)
@@ -131,13 +76,15 @@ class ReversiModelTrain(object):
         policy_kwargs = dict(
             features_extractor_class=CustomCNN,
             features_extractor_kwargs=dict(features_dim=256,
+                                           backbone=self.backbone,
                                            # net_arch=[64, 128, 256],
                                            net_arch=[64, 128, 128],
+                                           # net_arch=[128, 128],
                                            # net_arch=[32, 64, 64],
                                            kernel_size=3,
                                            stride=1,
-                                           padding='same',
-                                           is_batch_norm=False),
+                                           padding=1,
+                                           is_batch_norm=True),
             net_arch=[256, 256],
             normalize_images=False
         )
@@ -146,16 +93,16 @@ class ReversiModelTrain(object):
             model = self.PolicyModel.load(self.model_path, env=vec_env)
         except Exception:
             print(f"load model from self.model_path: {self.model_path} error")
-            model = PPO('MlpPolicy', vec_env,
+            model = self.PolicyModel(MaskableActorCriticPolicy, vec_env,
                           policy_kwargs=policy_kwargs,
                           learning_rate=2e-4,  # learning_rate=2.5e-4,
                           ent_coef=0.01,
                           n_steps=64, # n_steps=128,
                           n_epochs=4,
                           batch_size=64, # batch_size=256,
-                          gamma=0.9,
-                          gae_lambda=0.8,
-                          clip_range=0.2,
+                          gamma=0.99,
+                          gae_lambda=0.95,
+                          clip_range=0.1,
                           vf_coef=0.5,
                           verbose=1,
                           tensorboard_log=self.tensorboard_log)
@@ -199,14 +146,14 @@ class ReversiModelTrain(object):
         # opponent_model = PPO.load("models/Reversi_ppo/model4x4_50w")
         # opponent_model = PPO.load("models/Reversi_ppo/model")
         if self.opponent_model_path != "random":
-            opponent_model = PPO.load(opponent_model_path)
+            opponent_model = self.PolicyModel.load(opponent_model_path)
         else:
             opponent_model = "random"
 
         env = ReversiEnv(opponent=opponent_model, is_train=False, board_size=self.board_size, player_color=player_color,
                          verbose=verbose)
 
-        model = PPO.load(model_path)
+        model = self.PolicyModel.load(model_path)
         # model = PPO.load("models/Reversi_ppo/model4x4_50w")
 
         total_round = 0
@@ -260,6 +207,7 @@ def task_args_parser(argv, usage=None):
 
     # env config
     parser.add_argument('--board_size', type=int, default=8, help="棋盘尺寸")
+    parser.add_argument('--backbone', type=str, default='backbone', help="特征提取骨干网络， [cnn, resnet]")
     parser.add_argument('--n_envs', type=int, default=4, help="并行环境个数")
     parser.add_argument('--total_timesteps', type=int, default=10_0000, help="训练步数")
     parser.add_argument('--cp_timesteps', type=int, default=10_0000, help="检查点步数")
@@ -274,20 +222,20 @@ def task_args_parser(argv, usage=None):
 def run_train(argv):
     usage = '''
     example:
-    python reversi_model_train.py --board_size 8 --total_timesteps 1000000 --cp_timesteps 200000 --n_envs 8 --opponent_model_path random --start_index 1000000
-    python reversi_model_train.py --board_size 8 --total_timesteps 1000000 --cp_timesteps 200000 --n_envs 8 --opponent_model_path random --start_index 1000000
+    python reversi_model_train.py --board_size 8 --total_timesteps 50000000 --cp_timesteps 200000 --n_envs 4 --opponent_model_path random --start_index 1000000
+    python reversi_model_train.py --board_size 8 --total_timesteps 50000000 --cp_timesteps 200000 --n_envs 4 --opponent_model_path random --start_index 1000000
 
     '''
     args = task_args_parser(argv, usage)
     base_path = '/content/drive/MyDrive/'
-
+    backbone = args.backbone
     board_size = args.board_size
     n_envs = args.n_envs
     total_timesteps = args.total_timesteps
     start_index = args.start_index
     check_point_timesteps = args.cp_timesteps
     opponent_model_path = args.opponent_model_path
-    tensorboard_log = f"models/ppo_{board_size}x{board_size}_cnn/"
+    tensorboard_log = f"models/ppo_{board_size}x{board_size}_{backbone}/"
     # tensorboard_log = os.path.join(base_path, tensorboard_log)
 
     if not os.path.isdir(tensorboard_log):
@@ -295,6 +243,7 @@ def run_train(argv):
     model_path = os.path.join(tensorboard_log, "model")
 
     train_obj = ReversiModelTrain(board_size=board_size,
+                                  backbone=backbone,
                                   check_point_timesteps=check_point_timesteps,
                                   n_envs=n_envs,
                                   model_path=model_path,

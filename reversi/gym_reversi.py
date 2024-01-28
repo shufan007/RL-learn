@@ -41,12 +41,13 @@ class ReversiEnv(gym.Env):
     WHITE = 1
     metadata = {"render.modes": ["ansi", "human"]}
 
-    def __init__(self, opponent, is_train=True, board_size=8, player_color='black', greedy_rate=0, verbose=0):
+    def __init__(self, opponent, is_train=True, board_size=8, n_channels=4, player_color='black', greedy_rate=0, verbose=0):
         """
         Args:
             opponent: An opponent policy
             is_train: 是否为训练模式，如果是训练模式，player_color 可不设置
             board_size: size of the Reversi board
+            # channels： 0: 黑棋位置， 1: 白棋位置， 2: 当前可合法落子位置，3：player 颜色, 4: 上次对手落子位置
             player_color: Stone color for the agent. Either 'black' or 'white'
             greedy_rate: 贪心奖励比率，大于0时使用贪心比率，值越大越即时奖励越大
                 True：当游戏结束时根据胜负得到[-1, 0, 1]奖励，其他情况奖励为0
@@ -95,13 +96,13 @@ class ReversiEnv(gym.Env):
         # One action for each board position and resign and pass
         self.action_space = spaces.Discrete(self.board_size**2)
 
-        self.N_CHANNELS = 4
+        self.n_channels = n_channels
         self.HEIGHT = self.board_size
         self.WIDTH = self.board_size
-        self.observation_space = spaces.Box(low=0, high=1, shape=(self.N_CHANNELS, self.HEIGHT, self.WIDTH),
+        self.observation_space = spaces.Box(low=0, high=1, shape=(self.n_channels, self.HEIGHT, self.WIDTH),
                                             dtype=np.uint8)
 
-        self.observation = np.zeros((self.N_CHANNELS, self.board_size, self.board_size), dtype=np.uint8)
+        self.observation = np.zeros((self.n_channels, self.board_size, self.board_size), dtype=np.uint8)
         # observation, info = self.reset()
         self.init_opponent()
 
@@ -126,7 +127,7 @@ class ReversiEnv(gym.Env):
             print(f"\n --- episode start --- \n")
         # init board setting
         # channels： 0: 黑棋位置， 1: 白棋位置， 2: 当前可合法落子位置，3：player 颜色
-        self.observation = np.zeros((self.N_CHANNELS, self.board_size, self.board_size), dtype=np.uint8)
+        self.observation = np.zeros((self.n_channels, self.board_size, self.board_size), dtype=np.uint8)
 
         # 训练模式下，每次棋盘重置时都随机生成主玩家颜色
         if self.is_train:
@@ -161,6 +162,9 @@ class ReversiEnv(gym.Env):
                 # 设置对手玩家合法位置
                 ReversiEnv.set_possible_actions_place(self.observation, possible_actions)
             _opponent_action = self.opponent_policy(self.observation, self.to_play)
+            # 设置对手落子位置
+            if self.n_channels > 4:
+                ReversiEnv.set_actions_place(self.observation, _opponent_action, channel_index=4)
             self._action_handler(_opponent_action, self.to_play)
             # ReversiEnv.make_place(self.observation, _opponent_action, ReversiEnv.BLACK)
             self.to_play = ReversiEnv.WHITE
@@ -185,7 +189,7 @@ class ReversiEnv(gym.Env):
         if self.done:
             return self.observation, 0.0, True, truncated, info
 
-        self.possible_actions = ReversiEnv.get_possible_actions(self.observation, self.player_color)
+        # self.possible_actions = ReversiEnv.get_possible_actions(self.observation, self.player_color)
         # 设置主玩家合法位置
         ReversiEnv.set_possible_actions_place(self.observation, self.possible_actions)
 
@@ -214,9 +218,17 @@ class ReversiEnv(gym.Env):
             possible_actions = ReversiEnv.get_possible_actions(self.observation, 1-self.player_color)
             # 设置对手玩家合法位置
             ReversiEnv.set_possible_actions_place(self.observation, possible_actions)
+            # 设置对手落子位置，对手的对手为自己
+            if self.n_channels > 4:
+                ReversiEnv.set_actions_place(self.observation, action, channel_index=4)
 
         opponent_action = self.opponent_policy(self.observation, 1 - self.player_color)
         self._action_handler(opponent_action, 1 - self.player_color)
+        # 设置对手落子位置
+        if self.n_channels > 4:
+            ReversiEnv.set_actions_place(self.observation, opponent_action, channel_index=4)
+            
+        self.possible_actions = ReversiEnv.get_possible_actions(self.observation, self.player_color)
 
         is_done, reward, score_diff = self.game_finished(self.observation)
         # 若本轮结束，直接获得最终奖励
@@ -448,6 +460,15 @@ class ReversiEnv(gym.Env):
         return board
 
     @staticmethod
+    def set_actions_place(board, action, channel_index=2):
+        board[channel_index, :, :] = 0
+        d = board.shape[-1]
+        if action < d**2:
+            [pos_x, pos_y] = ReversiEnv.action_to_coordinate(board, _action)
+            board[channel_index, pos_x, pos_y] = 1
+        return board
+
+    @staticmethod
     def set_possible_actions_place(board, possible_actions, channel_index=2):
         board[channel_index, :, :] = 0
         # possible_actions = ReversiEnv.get_possible_actions(board, player_color)
@@ -512,3 +533,11 @@ class ReversiEnv(gym.Env):
         score_diff = player_score - opponent_score
         return player_score, opponent_score, score_diff
 
+    def valid_action_mask(self):
+        valid_actions = np.zeros((self.board_size**2, ), dtype=np.uint8)
+        for idx in self.possible_actions:
+            valid_actions[idx] = 1
+        return valid_actions
+
+    def action_masks(self) -> np.ndarray:
+        return self.valid_action_mask()
