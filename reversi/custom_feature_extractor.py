@@ -145,6 +145,7 @@ class MyResNet(nn.Module):
         groups: int = 1,
         replace_stride_with_dilation: Optional[List[bool]] = None,
         norm_layer: Optional[Callable[..., nn.Module]] = None,
+        pool_type=None
     ) -> None:
         super().__init__()
 
@@ -283,7 +284,8 @@ class MyCnnNet(nn.Module):
             kernel_size=3,
             stride=1,
             padding=1,
-            is_batch_norm=False
+            is_batch_norm=False,
+            pool_type=None,
     ) -> None:
         super().__init__()
 
@@ -293,6 +295,13 @@ class MyCnnNet(nn.Module):
         self.stride = stride
         self.padding = padding
         self.is_batch_norm = is_batch_norm
+        self.pool_type = pool_type
+        self.max_pool = nn.MaxPool2d(kernel_size=kernel_size,
+                                     stride=stride+1,
+                                     padding=padding)
+        self.avg_pool = nn.AvgPool1d(kernel_size=kernel_size,
+                                     stride=stride+1,
+                                     padding=padding)
 
         self.conv_block = self._make_layer()
 
@@ -331,6 +340,14 @@ class MyCnnNet(nn.Module):
             if self.is_batch_norm:
                 conv_block.append(nn.BatchNorm2d(num_features=out_channels))
             conv_block.append(nn.ReLU())
+
+            # 添加池化层
+            if self.pool_type:
+                if i == 0 or i == len(self.net_arch)-1:
+                    pool = self.max_pool
+                    if self.pool_type == 'avg':
+                        pool = self.avg_pool
+                    conv_block.append(pool)
             in_channels = out_channels
             layers.extend(conv_block)
         layers.extend([nn.Flatten()])
@@ -362,7 +379,8 @@ class CustomCNN(BaseFeaturesExtractor):
             kernel_size=3,
             stride=1,
             padding=1,
-            is_batch_norm=False):
+            is_batch_norm=False,
+            pool_type=None):
         super().__init__(observation_space, features_dim)
         # We assume CxHxW images (channels first)
         # Re-ordering will be done by pre-preprocessing or wrapper
@@ -370,10 +388,10 @@ class CustomCNN(BaseFeaturesExtractor):
         stride_list = stride
         if backbone == 'cnn':
             self.net = self._build_cnn_layers(in_channels, net_arch=net_arch, kernel_size=kernel_size, stride=stride,
-                           padding=padding, is_batch_norm=is_batch_norm)
+                           padding=padding, is_batch_norm=is_batch_norm, pool_type=pool_type)
         else:
             self.net = self._build_resnet_layers(in_channels, net_arch=net_arch, kernel_size=kernel_size, stride=stride,
-                           padding=padding)
+                           padding=padding, pool_type=pool_type)
 
         # Compute shape by doing one forward pass
         # 自动推导 n_flatten
@@ -388,15 +406,15 @@ class CustomCNN(BaseFeaturesExtractor):
         self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
 
     def _build_cnn_layers(self, in_channels, net_arch=[32, 64, 128], kernel_size=3,
-            stride=1, padding=1, is_batch_norm=False):
+            stride=1, padding=1, is_batch_norm=False, pool_type=None):
         cnn_net = MyCnnNet(in_channels, net_arch=net_arch, kernel_size=kernel_size, stride=stride,
-                           padding=padding, is_batch_norm=is_batch_norm)
+                           padding=padding, is_batch_norm=is_batch_norm, pool_type=pool_type)
         return cnn_net
 
     def _build_resnet_layers(self, in_channels, net_arch=[32, 64, 128], kernel_size=3,
-            stride=1, padding=1, is_batch_norm=False):
+            stride=1, padding=1, is_batch_norm=False, pool_type=None):
         res_net = MyResNet(block=BasicBlock, blocks_num=[1,1,1],
-            in_channels=in_channels, net_arch=net_arch, num_classes=64)
+            in_channels=in_channels, net_arch=net_arch, num_classes=64, pool_type=pool_type)
         return res_net
 
     def forward(self, observations: th.Tensor) -> th.Tensor:
