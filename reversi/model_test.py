@@ -100,7 +100,8 @@ def game_play(model_path, opponent_model_path="random", n_channels=3, max_round=
     _failure = 0
     _equal = 0
 
-    env = ReversiEnv(opponent=opponent_model, n_channels=n_channels, is_train=False,
+    is_train = not deterministic
+    env = ReversiEnv(opponent=opponent_model, n_channels=n_channels, is_train=is_train,
                      board_size=board_size, verbose=verbose)
 
     obs, info = env.reset()

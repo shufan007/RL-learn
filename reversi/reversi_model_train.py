@@ -106,7 +106,7 @@ class ReversiModelTrain(object):
         self.current_timesteps = min(total_timesteps, start_timesteps)
         self.progress_remaining = 1
         self.learning_rate = lr_init
-        self.min_learning_rate = 5e-6
+        self.min_learning_rate = 1e-5
 
         self.opponent_distribution = self._get_opponent_distribution()
 
@@ -283,7 +283,7 @@ def task_args_parser(argv, usage=None):
 
     parser.add_argument('--tensorboard_log', type=str, help='tensorboard_log路径')
     parser.add_argument('--greedy_rate', type=int, default=0, help="贪心奖励比率，大于0时使用贪心比率，值越大越即时奖励越大")
-    parser.add_argument('--archive_timesteps', type=int, default=100_0000, help="存档训练步数")
+    parser.add_argument('--archive_timesteps', type=int, default=50_0000, help="存档训练步数")
     parser.add_argument('--archive_path', type=str, default='/content/drive/MyDrive/models', help='存档模型路径')
 
     args = parser.parse_args()
@@ -293,9 +293,11 @@ def task_args_parser(argv, usage=None):
 def run_train(argv):
     usage = '''
     example:
-    python reversi_model_train.py --backbone cnn --n_channels 3 --lr_init 0.0003 --lr_decay_rate 0.97 --n_steps 512 --n_epochs 4 --batch_size 64 --board_size 8 --total_timesteps 10000000 --cp_timesteps 50000 --n_envs 4 --opponent_update_timesteps 50000 --opponent_prob_decay_rate 0.9 --opponent_window_size 100 --start_timesteps 0 --tensorboard_log cnn_selfplay
+    python reversi_model_train.py --backbone cnn --n_channels 3 --lr_init 0.0003 --lr_decay_rate 0.99 --n_steps 512 --n_epochs 4 --batch_size 64 --board_size 8 --total_timesteps 10000000 --cp_timesteps 50000 --n_envs 4 --opponent_update_timesteps 50000 --opponent_prob_decay_rate 0.9 --opponent_window_size 100 --start_timesteps 0 --tensorboard_log cnn_selfplay
     
-    python reversi_model_train.py --backbone resnet --n_channels 3 --lr_init 0.0002 --lr_decay_rate 0.99 --n_steps 512 --n_epochs 4 --batch_size 64 --board_size 8 --total_timesteps 50000000 --cp_timesteps 50000 --n_envs 4 --opponent_update_timesteps 50000 --opponent_prob_decay_rate 0.85 --opponent_window_size 100 --start_timesteps 0 --tensorboard_log resnet_selfplay  --archive_path /content/drive/MyDrive/models
+    python reversi_model_train.py --backbone cnn --n_channels 3 --lr_init 0.00007 --lr_decay_rate 0.99 --n_steps 512 --n_epochs 4 --batch_size 64 --board_size 8 --total_timesteps 50000000 --cp_timesteps 50000 --n_envs 4 --opponent_update_timesteps 50000 --opponent_prob_decay_rate 0.9 --opponent_window_size 100 --start_timesteps 12950000 --tensorboard_log cnn_selfplay
+
+    python reversi_model_train.py --backbone resnet --n_channels 3 --lr_init 0.0002 --lr_decay_rate 0.99 --n_steps 512 --n_epochs 4 --batch_size 64 --board_size 8 --total_timesteps 50000000 --cp_timesteps 50000 --n_envs 4 --opponent_update_timesteps 50000 --opponent_prob_decay_rate 0.85 --opponent_window_size 100 --start_timesteps 0 --tensorboard_log resnet_selfplay  --archive_path /content/drive/MyDrive/models --archive_timesteps 500000
 
     debug
     python reversi_model_train.py --backbone cnn --n_channels 3 --lr_init 0.0003 --n_steps 512 --n_epochs 4 --batch_size 64 --board_size 8 --total_timesteps 200000 --cp_timesteps 10000 --n_envs 4 --opponent_update_timesteps 10000 --start_timesteps 0 --tensorboard_log ppo_8x8_cnn_debug001

@@ -1,10 +1,11 @@
 
 import os
+import json
 import numpy as np
 import random
 import torch
-from .model_deploy.custom_feature_extractor import CustomCNN
-from .model_deploy.policies import MaskableActorCriticPolicy
+from .deploy.custom_feature_extractor import CustomCNN
+from .deploy.policies import MaskableActorCriticPolicy
 
 
 class MyPlayer:
@@ -16,9 +17,6 @@ class MyPlayer:
         :param color: 下棋方，'X' - 黑棋，'O' - 白棋
         """
         self.n_channels = 3
-        self.backbone = 'cnn'
-        # self.backbone = 'res_net'
-
         self.channel_black = 0
         self.channel_white = 1
         self.channel_player_color = 2
@@ -34,30 +32,35 @@ class MyPlayer:
         self.board_size = 8
         self.player_color = self.colormap[color]
         self.model = self._load_model()
+        self.deterministic = True
+
 
     def _load_model(self):
         current_path = os.path.dirname(os.path.abspath(__file__))
         # print(f"current_path: {current_path}")
-        model_path = os.path.join(current_path, 'model_state_dict.pt')
+        model_path = os.path.join(current_path, 'model')
+        model_state_dict = os.path.join(model_path, 'model_state_dict.pt')
+        model_net_arch_config = os.path.join(model_path, 'net_arch_config.json')
+        net_arch_cfg = {}
+        with open(model_net_arch_config, encoding='UTF-8') as cfg:
+            net_arch_cfg = json.load(cfg)
 
-        observation_space = (self.n_channels, 8, 8)
+        observation_space = (self.n_channels, self.board_size, self.board_size)
         action_space = [observation_space[1] * observation_space[2]]
 
-        features_extractor_kwargs=dict(features_dim=256,
-                                       backbone=self.backbone,
-                                       # net_arch=[64, 128, 256],
-                                       net_arch=[64, 128, 128],
-                                       # net_arch=[128, 128],
-                                       # net_arch=[32, 64, 64],
-                                       kernel_size=3,
-                                       stride=1,
-                                       padding=1,
-                                       is_batch_norm=True)
+        features_extractor_kwargs_cfg = net_arch_cfg["features_extractor_kwargs"]
+        features_extractor_kwargs=dict(features_dim=features_extractor_kwargs_cfg["features_dim"],
+                                       backbone=features_extractor_kwargs_cfg["backbone"],
+                                       net_arch=features_extractor_kwargs_cfg["net_arch"],
+                                       kernel_size=features_extractor_kwargs_cfg["kernel_size"],
+                                       stride=features_extractor_kwargs_cfg["stride"],
+                                       padding=features_extractor_kwargs_cfg["padding"],
+                                       is_batch_norm=features_extractor_kwargs_cfg["net_arch"],)
 
         policy_model = MaskableActorCriticPolicy(
             observation_space=observation_space,
             action_space=action_space,
-            net_arch=[256, 256],
+            net_arch=net_arch_cfg["net_arch"],
             features_extractor_class=CustomCNN,
             features_extractor_kwargs=features_extractor_kwargs,
             share_features_extractor=True,
@@ -68,7 +71,7 @@ class MyPlayer:
         # device = torch.device('cpu')
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-        policy_model.load_state_dict(torch.load(model_path, map_location=device))
+        policy_model.load_state_dict(torch.load(model_state_dict, map_location=device))
         policy_model.eval()
         return policy_model
 
@@ -81,7 +84,9 @@ class MyPlayer:
         observation, possible_actions = self._get_observation(board)
         action_masks = self._valid_action_mask(possible_actions)
 
-        _action, _states = self.model.predict(observation, deterministic=True, action_masks=action_masks)
+        _action, _states = self.model.predict(observation,
+                                              deterministic=self.deterministic,
+                                              action_masks=action_masks)
         # print(f"possible_actions:{possible_actions}")
         # print(f"_action 1:{_action}")
         _action = int(_action)

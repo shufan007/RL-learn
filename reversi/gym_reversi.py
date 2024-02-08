@@ -25,10 +25,10 @@ def make_random_policy(np_random):
     return random_policy
 
 
-def make_model_policy(model):
+def make_model_policy(model, deterministic=False):
     def model_policy(observation, player_color=None, action_masks=None):
         # 注： 用对手作为陪练时也要设置 deterministic=False， 否则会形成固定走法
-        action, _states = model.predict(observation, deterministic=False, action_masks=action_masks)
+        action, _states = model.predict(observation, deterministic=deterministic, action_masks=action_masks)
         return int(action)
     return model_policy
 
@@ -114,7 +114,10 @@ class ReversiEnv(gym.Env):
                     "Unrecognized opponent policy {}".format(self.opponent)
                 )
         else:
-            self.opponent_policy = make_model_policy(self.opponent)
+            deterministic = False
+            if not self.is_train:
+                deterministic = True
+            self.opponent_policy = make_model_policy(self.opponent, deterministic=deterministic)
 
         return [seed]
 

@@ -1,0 +1,13 @@
+{
+  "features_extractor_kwargs": {
+    "features_dim": 256,
+    "backbone": "cnn",
+    "net_arch": [128, 128, 256],
+    "kernel_size": 3,
+    "stride": 1,
+    "padding": 1,
+    "is_batch_norm": true
+  },
+
+"net_arch": [256, 256]
+}

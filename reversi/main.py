@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 from sdk import RandomPlayer
 from sdk import Game
-from myModule import MyPlayer
+from deployModule import MyPlayer
 
 import importlib
 import datetime
+
 
 def do_play(player1, player2):
     game = Game(player1, player2)
@@ -15,6 +16,7 @@ def do_play(player1, player2):
     resultStr = result["result"]
     print(f"{resultStr}, time spent = {spent} seconds")
     return result['winner']
+
 
 def play_test(n):
     win_cnt = 0
